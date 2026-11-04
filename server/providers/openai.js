@@ -14,7 +14,7 @@ function mapOpenAIError(status, json, res, key) {
     return new AppError('INVALID_OPENAI_KEY', 'OpenAI rejected the API key (401).', {
       status: 401,
       provider: PROVIDER,
-      hint: 'Open Settings and enter a valid OpenAI API key.',
+      hint: 'Edit your API keys (section 1) and enter a valid OpenAI key.',
     });
   }
   if (status === 403) {

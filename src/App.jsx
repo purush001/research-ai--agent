@@ -6,7 +6,7 @@ import ResearchPanel, { Shortfall } from './components/Research.jsx';
 import Ideas from './components/Ideas.jsx';
 import Approval, { DEFAULT_TWEETS } from './components/Approval.jsx';
 import { LinkedInSection, XSection } from './components/Drafts.jsx';
-import { ErrorBanner } from './components/Common.jsx';
+import { EditKeysContext, ErrorBanner } from './components/Common.jsx';
 
 const DAY_MS = 24 * 3_600_000;
 
@@ -33,6 +33,8 @@ export default function App() {
   const [config, setConfig] = useState({}); // per idea: { ctaUrl, tweetCount }
   const [drafting, setDrafting] = useState(null);
   const draftingRef = useRef(null);
+  const generation = useRef(0); // bumped whenever drafts are started or discarded, so stale responses can be ignored
+  const [keysSignal, setKeysSignal] = useState(0);
   const [nowMs, setNowMs] = useState(Date.now);
 
   useEffect(() => {
@@ -61,9 +63,16 @@ export default function App() {
       setResearch({ ideas: res.ideas, window: res.window, missing: res.missing, warnings: res.warnings, stats: res.searchStats });
       setApprovedIds([]);
       setNotes({});
-      // Only a successful run moves the "since last run" marker; failures keep the old one.
-      saveLastRun(res.window.end);
-      setLastRun(res.window.end);
+      // The "since last run" marker only moves after a run that actually covered its window:
+      // some ideas found and every search succeeded. Otherwise the next run would skip
+      // stories this one missed. Failed runs (errors) never reach this point.
+      const complete = res.ideas.length > 0 && !res.searchStats?.failed;
+      if (complete) {
+        saveLastRun(res.window.end);
+        setLastRun(res.window.end);
+      } else {
+        setResearch((r) => ({ ...r, warnings: [...r.warnings, 'This run was incomplete, so "Since last successful run" still starts from the previous successful run.'] }));
+      }
       setNowMs(Date.now());
     } catch (e) {
       setResearchError(describeError(e));
@@ -108,7 +117,9 @@ export default function App() {
 
   /* ------------------------------ drafting ------------------------------ */
 
+  // No-op once drafts were discarded, so a late response can't throw on null state.
   const patch = (fn) => {
+    if (!draftingRef.current) return;
     const next = fn(draftingRef.current);
     draftingRef.current = next;
     setDrafting(next);
@@ -122,6 +133,8 @@ export default function App() {
   async function runAgent(platform, ids) {
     if (!ids.length) return;
     const d = draftingRef.current;
+    if (!d) return;
+    const gen = generation.current;
     const payload = ids.map((id) => buildPayload(platform, d, id));
     patch((cur) => ({
       ...cur,
@@ -132,6 +145,7 @@ export default function App() {
     }));
     try {
       const res = await (platform === 'linkedin' ? api.linkedin(payload) : api.x(payload));
+      if (gen !== generation.current) return; // drafts were discarded or restarted while this ran
       const list = platform === 'linkedin' ? res.posts : res.threads;
       patch((cur) => {
         const items = { ...cur[platform].items };
@@ -143,6 +157,7 @@ export default function App() {
         return { ...cur, [platform]: { error: null, items } };
       });
     } catch (e) {
+      if (gen !== generation.current) return;
       const error = describeError(e);
       // Drafts that already completed are untouched; only the requested ones fail.
       patch((cur) => ({
@@ -155,6 +170,7 @@ export default function App() {
   function startDrafting() {
     const ideas = approvedIdeas.map((i) => ({ ...i, notes: (notes[i.id] || '').trim() }));
     const snapshotConfig = Object.fromEntries(ideas.map((i) => [i.id, { ...config[i.id] }]));
+    generation.current += 1;
     draftingRef.current = { ideas, config: snapshotConfig, linkedin: emptyAgent(), x: emptyAgent() };
     setDrafting(draftingRef.current);
     const ids = ideas.map((i) => i.id);
@@ -167,6 +183,7 @@ export default function App() {
   function resetDrafts() {
     const has = drafting && ['linkedin', 'x'].some((p) => Object.values(drafting[p].items).some((i) => i.status === 'done'));
     if (has && !window.confirm('Discard all drafts and choose ideas again?')) return;
+    generation.current += 1;
     draftingRef.current = null;
     setDrafting(null);
   }
@@ -183,7 +200,13 @@ export default function App() {
 
   /* -------------------------------- render ------------------------------- */
 
+  const editKeys = useCallback(() => {
+    setKeysSignal((n) => n + 1);
+    document.getElementById('settings')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
   return (
+    <EditKeysContext.Provider value={editKeys}>
     <div className="page">
       <header className="masthead">
         <h1>AI News Research &amp; Social Content</h1>
@@ -191,7 +214,7 @@ export default function App() {
       </header>
       <ErrorBanner error={bootError} />
 
-      <Settings session={session} onSessionChange={setSession} />
+      <Settings session={session} onSessionChange={setSession} openSignal={keysSignal} />
 
       <ResearchPanel
         ready={ready}
@@ -211,7 +234,7 @@ export default function App() {
       {research && (
         <section className="card" aria-labelledby="ideas-h">
           <div className="card-head"><h2 id="ideas-h">3 · Review &amp; approve</h2></div>
-          <Shortfall missing={research.missing} windowEnd={research.window.end} widening={widening} onWiden={widen} disabled={hasDrafts || running} />
+          <Shortfall missing={research.missing} widening={widening} onWiden={widen} disabled={hasDrafts || running} />
           {research.ideas.length === 0 ? (
             <p className="empty">No ideas were found. Widen the window or retry.</p>
           ) : (
@@ -243,5 +266,6 @@ export default function App() {
         All three agents use <code>{session?.model || 'gpt-6.1-sol'}</code> · Web search by SerpAPI · Drafts are for manual publishing; nothing is posted for you.
       </footer>
     </div>
+    </EditKeysContext.Provider>
   );
 }

@@ -71,7 +71,7 @@ export default function ResearchPanel({ ready, mode, onMode, lastRun, previewWin
   );
 }
 
-export function Shortfall({ missing, windowEnd, widening, onWiden, disabled }) {
+export function Shortfall({ missing, widening, onWiden, disabled }) {
   const total = CATEGORIES.reduce((n, c) => n + (missing[c] || 0), 0);
   const [hours, setHours] = useState(168);
   const elapsed = useElapsed(widening);

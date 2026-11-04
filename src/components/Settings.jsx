@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api, describeError } from '../api.js';
 import { ErrorBanner, Spinner } from './Common.jsx';
 
@@ -29,7 +29,7 @@ function KeyField({ id, label, configured, value, onChange, placeholder, error, 
   );
 }
 
-export default function Settings({ session, onSessionChange }) {
+export default function Settings({ session, onSessionChange, openSignal }) {
   const [openaiKey, setOpenaiKey] = useState('');
   const [serpapiKey, setSerpapiKey] = useState('');
   const [busy, setBusy] = useState(false);
@@ -37,7 +37,14 @@ export default function Settings({ session, onSessionChange }) {
   const [notes, setNotes] = useState({});
   const [fatal, setFatal] = useState(null);
   const ready = session?.configured.openai && session?.configured.serpapi;
-  const [open, setOpen] = useState(!ready);
+  // null = the user has not toggled the panel: it follows `ready` (open until both keys are saved,
+  // including after the session status finishes loading on a page reload).
+  const [userOpen, setUserOpen] = useState(null);
+  const open = userOpen ?? !ready;
+  const setOpen = (v) => setUserOpen(typeof v === 'function' ? v(open) : v);
+  useEffect(() => {
+    if (openSignal) setUserOpen(true);
+  }, [openSignal]);
 
   async function save(e) {
     e.preventDefault();

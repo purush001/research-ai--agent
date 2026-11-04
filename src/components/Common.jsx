@@ -1,8 +1,16 @@
-import { useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from 'react';
 import { copyText } from '../format.js';
 
+/** Provided by App: opens and scrolls to the API-keys panel. */
+export const EditKeysContext = createContext(null);
+const KEY_ERROR = /^(INVALID_.*KEY|MISSING_KEY)$/;
+
 export function ErrorBanner({ error, onDismiss, action }) {
+  const editKeys = useContext(EditKeysContext);
   if (!error) return null;
+  const keyAction = editKeys && KEY_ERROR.test(error.code) ? (
+    <button className="btn btn-small btn-primary" onClick={editKeys}>Edit API keys</button>
+  ) : null;
   return (
     <div className="banner banner-error" role="alert">
       <div>
@@ -12,6 +20,7 @@ export function ErrorBanner({ error, onDismiss, action }) {
       </div>
       <div className="banner-actions">
         {action}
+        {keyAction}
         {onDismiss && (
           <button className="btn btn-ghost" onClick={onDismiss} aria-label="Dismiss error">
             Dismiss

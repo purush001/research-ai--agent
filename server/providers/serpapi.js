@@ -11,7 +11,7 @@ function mapSerpError(status, json, res, key) {
     return new AppError('INVALID_SERPAPI_KEY', 'SerpAPI rejected the API key.', {
       status: 401,
       provider: PROVIDER,
-      hint: 'Open Settings and enter a valid SerpAPI key.',
+      hint: 'Edit your API keys (section 1) and enter a valid SerpAPI key.',
     });
   }
   if (status === 429 || /run out of searches|plan.*(limit|exceeded)|rate/i.test(msg)) {

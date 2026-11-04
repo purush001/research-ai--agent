@@ -1,9 +1,8 @@
+import { LINKEDIN_LIMIT } from '../../shared/constants.js';
 import { X_LIMIT, validateTweet, xWeightedLength } from '../../shared/xlength.js';
 import { CATEGORY_META } from '../format.js';
 import { validCount, validUrl, MAX_TWEETS, MIN_TWEETS } from './Approval.jsx';
 import { CopyButton, ErrorBanner, Spinner, useElapsed } from './Common.jsx';
-
-const LINKEDIN_LIMIT = 3000;
 
 function agentSummary(agent, ids) {
   const items = ids.map((id) => agent.items[id]);

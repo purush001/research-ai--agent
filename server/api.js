@@ -4,22 +4,15 @@ import { assertSameOrigin, parseCookies, readJson, sendError, sendJson } from '.
 import { createSession, destroySession, getSession, sessionSecrets } from './session.js';
 import { checkOpenAIKey } from './providers/openai.js';
 import { checkSerpApiKey } from './providers/serpapi.js';
-import { CATEGORIES, QUOTAS, missingCounts, runResearch } from './agents/research.js';
+import { CATEGORIES, QUOTAS, MAX_TWEETS, MIN_TWEETS, isHttpUrl } from '../shared/constants.js';
+import { missingCounts, runResearch } from './agents/research.js';
 import { runLinkedIn } from './agents/linkedin.js';
-import { MAX_TWEETS, MIN_TWEETS, runX } from './agents/x.js';
+import { runX } from './agents/x.js';
 import { redact } from './redact.js';
 
 const COOKIE = 'sid';
 const MAX_KEY_LENGTH = 400;
 
-const isHttpUrl = (s) => {
-  try {
-    const u = new URL(s);
-    return u.protocol === 'http:' || u.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
 const str = (v, max) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 function cookieHeader(req, id) {
@@ -36,10 +29,10 @@ function sessionStatus(session) {
 
 function requireKeys(session, { openai, serpapi }) {
   if (openai && !session?.openaiKey) {
-    throw new AppError('MISSING_KEY', 'Add your OpenAI API key in Settings first.', { status: 401, provider: 'OpenAI' });
+    throw new AppError('MISSING_KEY', 'Add your OpenAI API key in section 1 (API keys) first.', { status: 401, provider: 'OpenAI' });
   }
   if (serpapi && !session?.serpapiKey) {
-    throw new AppError('MISSING_KEY', 'Add your SerpAPI key in Settings first.', { status: 401, provider: 'SerpAPI' });
+    throw new AppError('MISSING_KEY', 'Add your SerpAPI key in section 1 (API keys) first.', { status: 401, provider: 'SerpAPI' });
   }
 }
 

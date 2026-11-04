@@ -1,9 +1,10 @@
 import { chatJson } from '../providers/openai.js';
+import { LINKEDIN_LIMIT } from '../../shared/constants.js';
 import { extractUrls } from '../../shared/xlength.js';
 import { WRITING_STANDARD, formatDate, ideaForAgent, shorten } from './prompts.js';
-import { openingPasses, reviewOpenings } from './review.js';
+import { runDraftingAgent } from './runner.js';
 
-export const LINKEDIN_LIMIT = 3000;
+export { LINKEDIN_LIMIT };
 const HOOK_MAX_CHARS = 220;
 const MAX_ATTEMPTS = 3;
 const AUDIENCE = 'technical professionals with 10–20 years of experience (DBAs, architects, integration and ERP developers, engineering leads) who are new to agentic AI';
@@ -59,18 +60,19 @@ export function assemblePost({ hook, body, ctaLine }, sources, ctaUrl) {
 }
 
 export function validatePost(draft, idea) {
-  const problems = [];
+  const issues = [];
+  const add = (code, message) => issues.push({ code, message });
   const hook = (draft.hook || '').trim();
   const body = (draft.body || '').trim();
-  if (!hook) problems.push('hook is empty');
-  if (hook.split('\n').filter(Boolean).length > 2) problems.push('hook must be at most two lines');
-  if (hook.length > HOOK_MAX_CHARS) problems.push(`hook is ${hook.length} characters; keep it under ${HOOK_MAX_CHARS}`);
-  if (body.length < 400) problems.push('body is too short to earn the hook');
-  if (extractUrls(`${hook}\n${body}\n${draft.ctaLine || ''}`).length) problems.push('do not write URLs; links are added automatically');
-  if (idea.ctaUrl && !(draft.ctaLine || '').trim()) problems.push('ctaLine is required because a CTA URL was provided');
+  if (!hook) add('hook_empty', 'hook is empty');
+  if (hook.split('\n').filter(Boolean).length > 2) add('hook_lines', 'hook must be at most two lines');
+  if (hook.length > HOOK_MAX_CHARS) add('hook_long', `hook is ${hook.length} characters; keep it under ${HOOK_MAX_CHARS}`);
+  if (body.length < 400) add('body_short', 'body is too short to earn the hook');
+  if (extractUrls(`${hook}\n${body}\n${draft.ctaLine || ''}`).length) add('url_in_text', 'do not write URLs or domain names; links are added automatically');
+  if (idea.ctaUrl && !(draft.ctaLine || '').trim()) add('cta_missing', 'ctaLine is required because a CTA URL was provided');
   const text = assemblePost({ hook, body, ctaLine: draft.ctaLine || '' }, idea.sources, idea.ctaUrl);
-  if (text.length > LINKEDIN_LIMIT) problems.push(`full post is ${text.length} characters; LinkedIn allows ${LINKEDIN_LIMIT}. Shorten the body`);
-  return { problems, text, hook, body };
+  if (text.length > LINKEDIN_LIMIT) add('post_too_long', `full post is ${text.length} characters; LinkedIn allows ${LINKEDIN_LIMIT}. Shorten the body`);
+  return { issues, problems: issues.map((i) => i.message), text, hook, body };
 }
 
 /**
@@ -78,16 +80,16 @@ export function validatePost(draft, idea) {
  * (possibly with warnings) or an error, so one bad draft never loses the rest.
  * `ideas` are 1-3 approved ideas: { id, ..., sources, notes, ctaUrl }.
  */
-export async function runLinkedIn(session, ideas) {
-  const numbered = ideas.map((idea, i) => ({ idea, number: i + 1 }));
-  const results = new Map();
-  let pending = numbered.map((n) => ({ ...n, feedback: null, previous: null }));
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS && pending.length; attempt++) {
-    let out;
-    try {
-      out = await chatJson(session, {
+export function runLinkedIn(session, ideas) {
+  return runDraftingAgent(session, ideas, {
+    platform: 'linkedin',
+    noun: 'post',
+    audience: AUDIENCE,
+    openingRules: `The opening is the first one or two lines (at most ${HOOK_MAX_CHARS} characters), plain text, no URLs.`,
+    maxAttempts: MAX_ATTEMPTS,
+    countFor: () => undefined,
+    async generate(sess, pending, attempt) {
+      return chatJson(sess, {
         system: SYSTEM,
         user: {
           task: attempt === 1 ? 'Write one LinkedIn post for each idea.' : 'Some drafts failed validation. Rewrite ONLY the ideas listed, fixing every listed problem.',
@@ -102,74 +104,22 @@ export async function runLinkedIn(session, ideas) {
         schema: SCHEMA,
         maxTokens: 10_000,
       });
-    } catch (e) {
-      lastError = e;
-      break; // provider-level failure (auth, rate limit, ...): surface it per idea below
-    }
-    const byNumber = new Map((out.posts || []).map((p) => [p.ideaNumber, p]));
-    const next = [];
-    for (const p of pending) {
-      const draft = byNumber.get(p.number);
-      if (!draft) {
-        next.push({ ...p, feedback: ['no post was returned for this idea'], previous: null });
-        continue;
-      }
-      const v = validatePost(draft, p.idea);
-      if (!v.problems.length) results.set(p.number, { draft, text: v.text, warnings: [] });
-      else if (attempt === MAX_ATTEMPTS) results.set(p.number, { draft, text: v.text, warnings: v.problems.map((x) => `Validation: ${x}.`) });
-      else next.push({ ...p, feedback: v.problems, previous: draft });
-    }
-    pending = next;
-  }
-
-  if (lastError && !results.size) throw lastError; // nothing drafted: report the real cause
-
-  // Independent opening review (one extra call for all drafts that exist).
-  const drafted = numbered.filter((n) => results.has(n.number));
-  if (drafted.length) {
-    try {
-      const reviews = await reviewOpenings(session, {
-        platform: 'linkedin',
-        audience: AUDIENCE,
-        openingRules: `The opening is the first one or two lines (at most ${HOOK_MAX_CHARS} characters), plain text, no URLs.`,
-        items: drafted.map(({ idea, number }) => ({
-          ideaNumber: number,
-          storyHeadline: idea.headline,
-          confirmedDevelopment: idea.confirmedDevelopment,
-          opening: results.get(number).draft.hook,
-          restOfPost: results.get(number).draft.body,
-        })),
-      });
-      for (const { idea, number } of drafted) {
-        const r = reviews.get(number);
-        const entry = results.get(number);
-        if (!r || openingPasses(r)) continue;
-        const revised = { ...entry.draft, hook: (r.revisedOpening || '').trim() };
-        const v = validatePost(revised, idea);
-        const hookOnly = v.problems.filter((x) => /hook|URL/.test(x));
-        if (revised.hook && !hookOnly.length) {
-          entry.draft = revised;
-          entry.text = v.text;
-          entry.warnings.push(`Opening rewritten after review: ${r.problem}`);
-          entry.hookRevised = true;
-        } else {
-          entry.warnings.push(`Opening may be weak: ${r.problem}`);
-        }
-      }
-    } catch (e) {
-      for (const { number } of drafted) results.get(number).warnings.push('The automatic opening review could not run; read the first lines yourself.');
-    }
-  }
-
-  return numbered.map(({ idea, number }) => {
-    const r = results.get(number);
-    if (r) return { ideaId: idea.id, ok: true, text: r.text, hook: r.draft.hook.trim(), warnings: r.warnings, hookRevised: !!r.hookRevised };
-    return {
-      ideaId: idea.id,
-      ok: false,
-      error: lastError
-        ? { code: lastError.code || 'ERROR', message: lastError.message, hint: lastError.hint, retryAfter: lastError.retryAfter }
-        : { code: 'BAD_MODEL_OUTPUT', message: 'The model did not return a usable post for this idea.' },
-    };
+    },
+    draftFor: (out, number) => (out.posts || []).find((p) => p.ideaNumber === number),
+    usable: () => true,
+    validate: (draft, idea) => validatePost(draft, idea).issues,
+    describe: (draft) => draft,
+    reviewItem: (idea, number, draft) => ({
+      ideaNumber: number,
+      storyHeadline: idea.headline,
+      confirmedDevelopment: idea.confirmedDevelopment,
+      opening: draft.hook,
+      restOfPost: draft.body,
+    }),
+    withOpening: (draft, opening) => ({ ...draft, hook: opening }),
+    result(idea, draft, warnings, hookRevised) {
+      const v = validatePost(draft, idea);
+      return { ideaId: idea.id, ok: true, text: v.text, hook: v.hook, warnings, hookRevised };
+    },
   });
 }

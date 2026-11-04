@@ -1,18 +1,10 @@
+import { DEFAULT_TWEETS, MAX_TWEETS, MIN_TWEETS, isHttpUrl } from '../../shared/constants.js';
 import { CATEGORY_META } from '../format.js';
 
-export const MIN_TWEETS = 1;
-export const MAX_TWEETS = 25;
-export const DEFAULT_TWEETS = 7;
+export { DEFAULT_TWEETS, MAX_TWEETS, MIN_TWEETS };
 
-export function validUrl(s) {
-  if (!s) return true;
-  try {
-    const u = new URL(s);
-    return u.protocol === 'http:' || u.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
+/** A blank CTA field is valid (it means "no CTA"). */
+export const validUrl = (s) => !s || isHttpUrl(s);
 
 export const validCount = (n) => Number.isInteger(n) && n >= MIN_TWEETS && n <= MAX_TWEETS;
 

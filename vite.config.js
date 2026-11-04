@@ -1,17 +1,21 @@
 import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { createApiHandler } from './server/api.js';
 
-// SerpAPI does not reliably allow direct browser (CORS) calls, so the dev and
-// preview servers forward /serpapi/* to serpapi.com. The API key is still
-// entered in the UI and sent per request.
-const serpapiProxy = {
-  '/serpapi': {
-    target: 'https://serpapi.com',
-    changeOrigin: true,
-    rewrite: (path) => path.replace(/^\/serpapi/, ''),
-  },
-};
+// In development and `vite preview` the same API handler that `npm start` uses
+// is mounted as middleware, so one command runs the UI and the backend. API
+// keys are entered in the UI, held in server memory, and never read by Vite
+// (there are no VITE_* credentials), so they cannot end up in the bundle.
+function apiPlugin() {
+  const mount = (server) => {
+    const api = createApiHandler();
+    server.middlewares.use((req, res, next) => {
+      api(req, res).then((handled) => handled || next(), next);
+    });
+  };
+  return { name: 'content-agents-api', configureServer: mount, configurePreviewServer: mount };
+}
 
 export default defineConfig({
-  server: { proxy: serpapiProxy },
-  preview: { proxy: serpapiProxy },
+  plugins: [react(), apiPlugin()],
 });

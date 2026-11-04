@@ -3,105 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Content Agents</title>
+    <meta name="referrer" content="no-referrer" />
+    <title>AI News Research &amp; Social Content</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232453d6'/%3E%3Cpath d='M9 22V10h6a4 4 0 010 8h-3' stroke='white' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="wrap topbar-inner">
-        <div>
-          <h1>AI Content Agents</h1>
-          <p class="sub">Research → you pick → LinkedIn &amp; X posts, written in parallel</p>
-        </div>
-        <button id="settings-btn" class="btn ghost" type="button">
-          <span id="key-dot" class="dot" aria-hidden="true"></span> Settings
-        </button>
-      </div>
-    </header>
-
-    <main class="wrap">
-      <ol class="steps" id="steps" aria-label="Progress">
-        <li data-step="1" class="active"><b>1</b> Research</li>
-        <li data-step="2"><b>2</b> Pick top 3</li>
-        <li data-step="3"><b>3</b> Create content</li>
-      </ol>
-
-      <section class="card" id="research-card">
-        <h2>🔎 Research Agent</h2>
-        <p class="muted">Searches the latest AI news with SerpAPI and proposes 10 content ideas.</p>
-        <div class="row">
-          <label class="grow">Focus (optional)
-            <input id="focus" type="text" placeholder="e.g. AI agents, MCP, open-source models — leave blank for general AI news" />
-          </label>
-          <label>News from
-            <select id="period">
-              <option value="d">Past 24 hours</option>
-              <option value="w" selected>Past week</option>
-              <option value="m">Past month</option>
-            </select>
-          </label>
-        </div>
-        <div class="actions">
-          <button id="research-btn" class="btn primary" type="button">Run Research Agent</button>
-        </div>
-        <ul class="feed" id="feed" aria-live="polite" hidden></ul>
-      </section>
-
-      <section class="card" id="select-card" hidden>
-        <h2>✅ Choose your top 3 ideas</h2>
-        <p class="muted">Review the 10 ideas and pick exactly 3. <b id="sel-count">0 / 3</b> selected.</p>
-        <div class="ideas" id="ideas"></div>
-
-        <div class="options">
-          <label class="grow">LinkedIn CTA link (optional)
-            <input id="cta-link" type="url" placeholder="https://yourdomain.com/newsletter — if blank, no CTA is added" />
-          </label>
-          <label>Tweets per thread
-            <input id="tweet-count" type="number" min="2" max="20" value="7" />
-          </label>
-        </div>
-        <p class="error" id="options-error" hidden></p>
-        <div class="actions">
-          <button id="generate-btn" class="btn primary" type="button" disabled>Approve &amp; generate LinkedIn + X content</button>
-        </div>
-      </section>
-
-      <section id="output" hidden>
-        <div class="cols">
-          <div>
-            <h2 class="col-title">💼 LinkedIn Agent</h2>
-            <div id="li-out" class="stack"></div>
-          </div>
-          <div>
-            <h2 class="col-title">🐦 X / Twitter Agent</h2>
-            <div id="tw-out" class="stack"></div>
-          </div>
-        </div>
-      </section>
-    </main>
-
-    <dialog id="settings-dialog">
-      <form method="dialog" id="settings-form">
-        <h2>Settings</h2>
-        <p class="muted">Keys stay in your browser and are sent only to OpenAI and SerpAPI.</p>
-        <label>OpenAI API key
-          <input id="openai-key" type="password" autocomplete="off" placeholder="sk-..." />
-        </label>
-        <label>SerpAPI key
-          <input id="serp-key" type="password" autocomplete="off" placeholder="SerpAPI private key" />
-        </label>
-        <label>Model
-          <input id="model" type="text" autocomplete="off" />
-        </label>
-        <label class="check">
-          <input id="remember" type="checkbox" /> Remember on this device (otherwise cleared when the tab closes)
-        </label>
-        <div class="actions end">
-          <button type="button" id="settings-cancel" class="btn ghost">Cancel</button>
-          <button type="submit" class="btn primary">Save</button>
-        </div>
-      </form>
-    </dialog>
-
-    <script type="module" src="/src/main.js"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

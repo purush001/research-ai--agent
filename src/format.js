@@ -1,9 +1,7 @@
-export const CATEGORY_META = {
-  oracle: { label: 'Oracle', quota: 2 },
-  peoplesoft: { label: 'PeopleSoft', quota: 2 },
-  general: { label: 'General AI news', quota: 6 },
-};
-export const CATEGORIES = ['oracle', 'peoplesoft', 'general'];
+import { CATEGORIES, CATEGORY_LABELS, QUOTAS } from '../shared/constants.js';
+
+export { CATEGORIES };
+export const CATEGORY_META = Object.fromEntries(CATEGORIES.map((c) => [c, { label: CATEGORY_LABELS[c], quota: QUOTAS[c] }]));
 
 export const fmtDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : 'date unverified';

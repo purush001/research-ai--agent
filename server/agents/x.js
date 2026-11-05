@@ -1,11 +1,11 @@
 import { chatJson } from '../providers/openai.js';
+import { MAX_TWEETS, MIN_TWEETS } from '../../shared/constants.js';
 import { X_LIMIT, extractUrls, validateTweet } from '../../shared/xlength.js';
 import { normalizeUrl } from './dates.js';
 import { WRITING_STANDARD, ideaForAgent } from './prompts.js';
-import { openingPasses, reviewOpenings } from './review.js';
+import { runDraftingAgent } from './runner.js';
 
-export const MIN_TWEETS = 1;
-export const MAX_TWEETS = 25;
+export { MAX_TWEETS, MIN_TWEETS };
 const MAX_ATTEMPTS = 4;
 const AUDIENCE = 'developers at tech startups in San Francisco and the Bay Area';
 
@@ -38,7 +38,7 @@ X specifics
 - Write EXACTLY tweetCount tweets for each idea: not one more, not one fewer. Tweet 1 is the hook and must stand on its own. A short thread must be dense, not padded; a long one must go deeper, not repeat.
 - Each tweet is at most ${X_LIMIT} characters by X's counting rules: every URL counts as 23 characters no matter how long it is, most Latin text counts 1 per character, emoji and CJK count 2, and a line break counts 1.
 - Plain text. No markdown, no "1/" numbering, at most one hashtag in the whole thread (optional).
-- requiredLinks lists the supporting sources. Every one of them must appear in the thread as a full https:// URL copied exactly, inside a tweet that fits the limit (place each next to the fact it supports, or in the final tweet). Do not use any other URL. Never shorten URLs yourself.
+- requiredLinks lists the supporting sources. Every one of them must appear in the thread as a full https:// URL copied exactly, inside a tweet that fits the limit (place each next to the fact it supports, or in the final tweet). Do not use any other URL. Never shorten URLs yourself, and never write a bare domain such as example.com (X would turn it into a link and count it as 23 characters).
 - Separate confirmed facts from your own inference: label inference ("My read:", "Worth testing:").`;
 
 /** The sources an X thread must carry (kept small so they fit the thread). */
@@ -56,45 +56,47 @@ export function requiredLinksFor(idea, tweetCount) {
   return out;
 }
 
+/** Returns structured issues ({ code, message }); an empty list means the thread is valid. */
 export function validateThread(tweets, idea, tweetCount) {
-  const problems = [];
+  const issues = [];
+  const add = (code, message) => issues.push({ code, message });
   if (!Array.isArray(tweets) || tweets.length !== tweetCount) {
-    problems.push(`must contain exactly ${tweetCount} tweets but has ${Array.isArray(tweets) ? tweets.length : 0}`);
-    return problems;
+    add('count', `must contain exactly ${tweetCount} tweets but has ${Array.isArray(tweets) ? tweets.length : 0}`);
+    return issues;
   }
   tweets.forEach((t, i) => {
     const v = validateTweet(t);
-    if (v.empty) problems.push(`tweet ${i + 1} is empty`);
-    else if (!v.valid) problems.push(`tweet ${i + 1} is ${v.length} characters by X's counting; remove at least ${v.over}`);
+    if (v.empty) add(`empty:${i + 1}`, `tweet ${i + 1} is empty`);
+    else if (!v.valid) add(`too_long:${i + 1}`, `tweet ${i + 1} is ${v.length} characters by X's counting; remove at least ${v.over}`);
   });
   const allowed = new Set(idea.sources.map((s) => normalizeUrl(s.url)));
   const present = new Set();
   for (const t of tweets) {
     for (const u of extractUrls(t)) {
       if (allowed.has(normalizeUrl(u))) present.add(normalizeUrl(u));
-      else problems.push(`unknown URL ${u}; use only the provided source URLs`);
+      else add(`unknown_url:${u}`, `unknown URL or domain "${u}"; use only the provided source URLs, written as full https:// links`);
     }
   }
   for (const s of requiredLinksFor(idea, tweetCount)) {
-    if (!present.has(normalizeUrl(s.url))) problems.push(`required link missing: ${s.url}`);
+    if (!present.has(normalizeUrl(s.url))) add(`missing_link:${s.url}`, `required link missing: ${s.url}`);
   }
-  return problems;
+  return issues;
 }
 
 /**
  * One thread per idea; `idea.tweetCount` sets that thread's length. Always
  * resolves with a result per idea so a failed thread never discards the others.
  */
-export async function runX(session, ideas) {
-  const numbered = ideas.map((idea, i) => ({ idea, number: i + 1, count: idea.tweetCount }));
-  const results = new Map(); // number -> { tweets, warnings }
-  let pending = numbered.map((n) => ({ ...n, feedback: null, previous: null }));
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS && pending.length; attempt++) {
-    let out;
-    try {
-      out = await chatJson(session, {
+export function runX(session, ideas) {
+  return runDraftingAgent(session, ideas, {
+    platform: 'x',
+    noun: 'thread',
+    audience: AUDIENCE,
+    openingRules: `The opening is tweet 1: plain text, at most ${X_LIMIT} characters by X's counting (a URL counts as 23). Do not add a URL unless tweet 1 already has one.`,
+    maxAttempts: MAX_ATTEMPTS,
+    countFor: (idea) => idea.tweetCount,
+    async generate(sess, pending, attempt) {
+      return chatJson(sess, {
         system: SYSTEM,
         user: {
           task: attempt === 1 ? 'Write one thread for each idea.' : 'Some threads failed validation. Rewrite ONLY the threads listed, fixing every listed problem.',
@@ -110,74 +112,22 @@ export async function runX(session, ideas) {
         schema: SCHEMA,
         maxTokens: 10_000,
       });
-    } catch (e) {
-      lastError = e;
-      break;
-    }
-    const byNumber = new Map((out.threads || []).map((t) => [t.ideaNumber, t]));
-    const next = [];
-    for (const p of pending) {
-      const thread = byNumber.get(p.number);
-      const tweets = (thread?.tweets || []).map((t) => String(t).trim());
-      const problems = thread ? validateThread(tweets, p.idea, p.count) : ['no thread was returned for this idea'];
-      if (!problems.length) results.set(p.number, { tweets, warnings: [] });
-      else if (attempt === MAX_ATTEMPTS && tweets.length) {
-        results.set(p.number, { tweets, warnings: problems.map((x) => `Validation: ${x}.`) });
-      } else next.push({ ...p, feedback: problems, previous: tweets.map((t, i) => ({ tweet: i + 1, text: t, xLength: validateTweet(t).length })) });
-    }
-    pending = next;
-  }
-
-  if (lastError && !results.size) throw lastError;
-
-  const drafted = numbered.filter((n) => results.has(n.number));
-  if (drafted.length) {
-    try {
-      const reviews = await reviewOpenings(session, {
-        platform: 'x',
-        audience: AUDIENCE,
-        openingRules: `The opening is tweet 1: plain text, at most ${X_LIMIT} characters by X's counting (a URL counts as 23). Do not add a URL unless tweet 1 already has one.`,
-        items: drafted.map(({ idea, number }) => {
-          const { tweets } = results.get(number);
-          return {
-            ideaNumber: number,
-            storyHeadline: idea.headline,
-            confirmedDevelopment: idea.confirmedDevelopment,
-            opening: tweets[0],
-            restOfThread: tweets.slice(1),
-          };
-        }),
-      });
-      for (const { idea, number, count } of drafted) {
-        const r = reviews.get(number);
-        const entry = results.get(number);
-        if (!r || openingPasses(r)) continue;
-        const revisedTweets = [(r.revisedOpening || '').trim(), ...entry.tweets.slice(1)];
-        // Only accept the rewrite if the new opening fits and the thread keeps its source links.
-        const linkProblems = validateThread(revisedTweets, idea, count).filter((x) => /link|URL/.test(x));
-        const fits = validateTweet(revisedTweets[0]).valid;
-        if (fits && !linkProblems.length) {
-          entry.tweets = revisedTweets;
-          entry.warnings.push(`Opening rewritten after review: ${r.problem}`);
-          entry.hookRevised = true;
-        } else {
-          entry.warnings.push(`Opening may be weak: ${r.problem}`);
-        }
-      }
-    } catch {
-      for (const { number } of drafted) results.get(number).warnings.push('The automatic opening review could not run; read tweet 1 yourself.');
-    }
-  }
-
-  return numbered.map(({ idea, number }) => {
-    const r = results.get(number);
-    if (r) return { ideaId: idea.id, ok: true, tweets: r.tweets, warnings: r.warnings, hookRevised: !!r.hookRevised };
-    return {
-      ideaId: idea.id,
-      ok: false,
-      error: lastError
-        ? { code: lastError.code || 'ERROR', message: lastError.message, hint: lastError.hint, retryAfter: lastError.retryAfter }
-        : { code: 'BAD_MODEL_OUTPUT', message: 'The model did not return a usable thread for this idea.' },
-    };
+    },
+    draftFor(out, number) {
+      const thread = (out.threads || []).find((t) => t.ideaNumber === number);
+      return thread ? { tweets: (thread.tweets || []).map((t) => String(t).trim()) } : undefined;
+    },
+    usable: (draft) => draft.tweets.length > 0,
+    validate: (draft, idea, count) => validateThread(draft.tweets, idea, count),
+    describe: (draft) => draft.tweets.map((t, i) => ({ tweet: i + 1, text: t, xLength: validateTweet(t).length })),
+    reviewItem: (idea, number, draft) => ({
+      ideaNumber: number,
+      storyHeadline: idea.headline,
+      confirmedDevelopment: idea.confirmedDevelopment,
+      opening: draft.tweets[0],
+      restOfThread: draft.tweets.slice(1),
+    }),
+    withOpening: (draft, opening) => ({ tweets: [opening, ...draft.tweets.slice(1)] }),
+    result: (idea, draft, warnings, hookRevised) => ({ ideaId: idea.id, ok: true, tweets: draft.tweets, warnings, hookRevised }),
   });
 }

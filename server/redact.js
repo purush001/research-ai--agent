@@ -2,7 +2,7 @@
 // was sent. Everything that leaves the server or reaches a log goes through here.
 
 const KEY_PATTERNS = [
-  /sk-[A-Za-z0-9_\-*.]{6,}/g, // OpenAI-style keys, full or partially masked
+  /(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-*.]{6,}/g, // OpenAI-style keys, full or partially masked (not inside words like "risk-based")
   /\b[a-f0-9]{48,64}\b/gi, // SerpAPI-style hex keys
   /(api[_-]?key=)[^&\s"']+/gi,
   /(bearer\s+)[A-Za-z0-9._\-]+/gi,

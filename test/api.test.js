@@ -187,6 +187,53 @@ test('one agent failing does not affect the other; errors are specific', async (
   assert.equal(retry.json.threads[0].ok, true);
 });
 
+test('transient model errors are retried instead of failing the agent', async () => {
+  const [a] = pick();
+  let calls = 0;
+  mock.state.failOpenAI = (req) => req.response_format.json_schema.name === 'x_threads' && ++calls === 1;
+  const r = await call('POST', '/api/x', { ideas: [{ ...a, tweetCount: 3 }] });
+  mock.state.failOpenAI = null;
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.threads[0].ok, true);
+  assert.ok(calls >= 2, 'the failed call was retried');
+});
+
+test('a failing repair call keeps the draft that already exists, with a warning', async () => {
+  const [a] = pick();
+  mock.state.xOverlongRemaining = 1; // attempt 1: tweet 1 is over the limit
+  mock.state.failOpenAI = (req) => req.response_format.json_schema.name === 'x_threads' && req.messages[1].content.includes('problemsToFix');
+  const r = await call('POST', '/api/x', { ideas: [{ ...a, tweetCount: 3 }] });
+  mock.state.failOpenAI = null;
+  mock.state.xOverlongRemaining = 0;
+  assert.equal(r.status, 200, r.text);
+  const t = r.json.threads[0];
+  assert.equal(t.ok, true, 'draft is kept');
+  assert.equal(t.tweets.length, 3);
+  assert.ok(t.warnings.some((w) => /Validation: tweet 1 is/.test(w)));
+  assert.ok(t.warnings.some((w) => /Repair failed/.test(w)));
+});
+
+test('a hook rewrite that would break the LinkedIn limit is rejected', async () => {
+  const [a] = pick();
+  mock.state.reviewFail = true;
+  mock.state.reviewRevisedText = 'y'.repeat(3100);
+  try {
+    const r = await call('POST', '/api/linkedin', { ideas: [a] });
+    const p = r.json.posts[0];
+    assert.equal(p.ok, true);
+    assert.ok(!p.hookRevised);
+    assert.ok(p.text.length <= 3000);
+    assert.ok(!p.text.includes('yyyy'));
+    assert.ok(p.warnings.some((w) => /Opening may be weak/.test(w)));
+  } finally { mock.state.reviewFail = false; mock.state.reviewRevisedText = undefined; }
+});
+
+test('bare domains in tweets are sent back for repair', async () => {
+  const [a] = pick();
+  const { validateThread } = await import('../server/agents/x.js');
+  assert.ok(validateThread(['Hook', `${a.sources[0].url}`, 'see oracle.com/docs'], a, 3).some((i) => i.code.startsWith('unknown_url')));
+});
+
 test('rate limits surface as RATE_LIMITED with retry-after', async () => {
   const saved = cookie;
   cookie = '';

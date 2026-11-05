@@ -8,7 +8,7 @@
     "build": "vite build",
     "start": "node server/index.js",
     "dev:mock": "node scripts/dev-mock.js",
-    "test": "node --test test/*.test.js"
+    "test": "vite build && node --test test/*.test.js"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^6.2.1",

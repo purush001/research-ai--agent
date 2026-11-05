@@ -14,8 +14,22 @@ const SINGLE_WEIGHT_RANGES = [
   [0x2032, 0x2037],
 ];
 
-// Matches http(s) URLs; trailing sentence punctuation is not part of the URL.
-const URL_RE = /https?:\/\/[^\s<>"']+/gi;
+// X treats both "https://example.com/x" and scheme-less "example.com/x" as links
+// (each counted as 23), so both forms are matched. Scheme-less matching needs a
+// known top-level domain so that "Node.js" or "v8.62" are not mistaken for links.
+const TLDS = [
+  'com', 'org', 'net', 'edu', 'gov', 'io', 'ai', 'dev', 'app', 'co', 'me', 'us', 'uk', 'de', 'fr', 'eu', 'info', 'biz',
+  'tech', 'cloud', 'xyz', 'sh', 'so', 'ly', 'gg', 'tv', 'fm', 'to', 'in', 'ca', 'au', 'jp', 'cn', 'ru', 'nl', 'ch', 'se',
+  'online', 'site', 'blog', 'news', 'page', 'link', 'live', 'run', 'software', 'systems',
+];
+const URL_RE = new RegExp(
+  [
+    'https?:\\/\\/[^\\s<>"\']+',
+    `(?<![\\w@/.:-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\\.)+(?:${TLDS.join('|')})(?![\\w@-])(?::\\d+)?(?:\\/[^\\s<>"\']*)?`,
+  ].join('|'),
+  'gi',
+);
+// Trailing sentence punctuation is not part of the URL.
 const TRAILING_PUNCT_RE = /[.,;:!?)\]}]+$/;
 
 const EMOJI_RE = /\p{Extended_Pictographic}/u;
@@ -37,8 +51,9 @@ function plainTextWeight(text) {
   const graphemes = segmenter ? Array.from(segmenter.segment(text), (s) => s.segment) : Array.from(text);
   let total = 0;
   for (const g of graphemes) {
-    // An emoji (including ZWJ sequences, flags and skin-tone variants) counts as 2.
-    if (EMOJI_RE.test(g)) {
+    // An emoji (including ZWJ sequences and variation-selector forms) counts as 2 in total.
+    // A lone text-style symbol such as (c) or (r) stays in the 1-weight range.
+    if (EMOJI_RE.test(g) && (g.codePointAt(0) > 0x10ff || /[\u200d\ufe0f]/.test(g))) {
       total += 2;
       continue;
     }

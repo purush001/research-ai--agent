@@ -145,7 +145,7 @@ function respond(schemaName, user, state) {
         bodySupportsClaim: true,
         couldFitUnrelatedStories: false,
         problem: state.reviewFail ? 'Opening is vague.' : '',
-        revisedOpening: state.reviewFail ? `Revised: ${i.storyHeadline.slice(0, 120)}` : i.opening,
+        revisedOpening: state.reviewFail ? (state.reviewRevisedText ?? `Revised: ${i.storyHeadline.slice(0, 120)}`) : i.opening,
       })),
     };
   }

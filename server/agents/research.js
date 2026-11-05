@@ -4,14 +4,9 @@ import { chatJson } from '../providers/openai.js';
 import { searchNews } from '../providers/serpapi.js';
 import { inWindow, normalizeHeadline, normalizeUrl, parseArticleDate, recencyFilter } from './dates.js';
 
-export const CATEGORIES = ['oracle', 'peoplesoft', 'general'];
-export const QUOTAS = { oracle: 2, peoplesoft: 2, general: 6 };
+import { CATEGORIES, CATEGORY_LABELS, QUOTAS } from '../../shared/constants.js';
 
-const CATEGORY_LABELS = {
-  oracle: 'Oracle',
-  peoplesoft: 'PeopleSoft',
-  general: 'General AI news',
-};
+export { CATEGORIES, CATEGORY_LABELS, QUOTAS };
 
 const QUERIES = {
   oracle: [
@@ -71,7 +66,7 @@ async function mapLimit(items, limit, fn) {
 
 const FATAL_SEARCH_CODES = new Set(['INVALID_SERPAPI_KEY', 'SERPAPI_QUOTA', 'RATE_LIMITED']);
 
-export function toCandidate(item, now, start, end) {
+export function toCandidate(item, now, start, end, category) {
   const url = item.link;
   if (!url) return null;
   const parsed = parseArticleDate(item, now);
@@ -86,7 +81,30 @@ export function toCandidate(item, now, start, end) {
     dateText: item.date || '',
     inWindow: inWindow(parsed, start, end),
     isPrimary: isPrimarySource(url),
+    categories: new Set(category ? [category] : []),
   };
+}
+
+const byPriority = (a, b) => Number(b.isPrimary) - Number(a.isPrimary) || Date.parse(b.publishedAt) - Date.parse(a.publishedAt);
+
+/**
+ * Caps the candidate list without letting one category crowd out another:
+ * each category's articles are ranked (primary sources first, then newest) and
+ * the cap is filled round-robin across the categories being searched.
+ */
+export function selectCandidates(candidates, categories, cap = 90) {
+  const lists = categories.map((c) => candidates.filter((x) => x.categories.has(c)).sort(byPriority));
+  const picked = new Set();
+  const out = [];
+  for (let i = 0; out.length < cap && lists.some((l) => i < l.length); i++) {
+    for (const l of lists) {
+      if (i < l.length && !picked.has(l[i]) && out.length < cap) {
+        picked.add(l[i]);
+        out.push(l[i]);
+      }
+    }
+  }
+  return out;
 }
 
 export async function gatherCandidates(session, { start, end, categories, now = new Date() }) {
@@ -100,7 +118,7 @@ export async function gatherCandidates(session, { start, end, categories, now = 
     try {
       const items = await searchNews(session, { query: task.query, tbs });
       stats.succeeded++;
-      return items;
+      return items.map((item) => ({ item, category: task.category }));
     } catch (e) {
       stats.failed++;
       const code = isAppError(e) ? e.code : 'SEARCH_FAILED';
@@ -119,17 +137,19 @@ export async function gatherCandidates(session, { start, end, categories, now = 
     });
   }
 
-  const seenUrl = new Set();
-  const seenTitle = new Set();
+  // De-duplicate by URL and title, remembering every category whose query found the article.
+  const seen = new Map();
   const all = [];
-  for (const item of results.flat()) {
-    const c = toCandidate(item, now, start, end);
+  for (const { item, category } of results.flat()) {
+    const c = toCandidate(item, now, start, end, category);
     if (!c || !c.title) continue;
-    const u = normalizeUrl(c.url);
-    const t = normalizeHeadline(c.title);
-    if (seenUrl.has(u) || seenTitle.has(t)) continue;
-    seenUrl.add(u);
-    seenTitle.add(t);
+    const keys = [`u:${normalizeUrl(c.url)}`, `t:${normalizeHeadline(c.title)}`];
+    const dup = keys.map((k) => seen.get(k)).find(Boolean);
+    if (dup) {
+      dup.categories.add(category);
+      continue;
+    }
+    keys.forEach((k) => seen.set(k, c));
     all.push(c);
   }
   stats.found = all.length;
@@ -139,8 +159,7 @@ export async function gatherCandidates(session, { start, end, categories, now = 
   stats.outsideWindow = all.length - inside.length - stats.undated;
 
   // Undated articles are not usable as evidence; dated, in-window ones only.
-  inside.sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
-  const candidates = inside.slice(0, 90).map((c, i) => ({ id: i + 1, ...c }));
+  const candidates = selectCandidates(inside, categories).map((c, i) => ({ id: i + 1, ...c }));
   return { candidates, stats };
 }
 
@@ -313,4 +332,3 @@ export async function runResearch(session, { start, end, needs, existing = [], n
   return { ideas, dropped, stats, warnings };
 }
 
-export { CATEGORY_LABELS };

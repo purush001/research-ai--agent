@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { X_LIMIT, extractUrls, validateTweet, xWeightedLength } from '../shared/xlength.js';
 import { inWindow, normalizeUrl, parseArticleDate, recencyFilter } from '../server/agents/dates.js';
-import { assembleIdeas, missingCounts } from '../server/agents/research.js';
+import { assembleIdeas, missingCounts, selectCandidates } from '../server/agents/research.js';
 import { assemblePost, validatePost } from '../server/agents/linkedin.js';
 import { requiredLinksFor, validateThread } from '../server/agents/x.js';
 import { redact } from '../server/redact.js';
@@ -127,14 +127,47 @@ test('LinkedIn validation flags URLs in prose, long hooks, missing CTA line', ()
 
 test('X thread validation: exact count, per-tweet limit, required links, unknown URLs', () => {
   const idea_ = { sources };
+  const msgs = (tweets, n) => validateThread(tweets, idea_, n).map((i) => i.message);
   const ok = ['Hook', 'Mid', `Read https://example.com/a and https://example.com/b`];
   assert.deepEqual(validateThread(ok, idea_, 3), []);
-  assert.ok(validateThread(ok, idea_, 4)[0].includes('exactly 4'));
-  assert.ok(validateThread([...ok.slice(0, 2), 'x'.repeat(300) + ' https://example.com/a https://example.com/b'], idea_, 3).some((p) => /tweet 3 is/.test(p)));
-  assert.ok(validateThread(['Hook', 'Mid', 'https://example.com/a'], idea_, 3).some((p) => /required link missing/.test(p)));
-  assert.ok(validateThread(['Hook', 'Mid', 'https://example.com/a https://example.com/b https://evil.dev/z'], idea_, 3).some((p) => /unknown URL/.test(p)));
+  assert.ok(msgs(ok, 4)[0].includes('exactly 4'));
+  assert.ok(msgs([...ok.slice(0, 2), 'x'.repeat(300) + ' https://example.com/a https://example.com/b'], 3).some((p) => /tweet 3 is/.test(p)));
+  assert.ok(msgs(['Hook', 'Mid', 'https://example.com/a'], 3).some((p) => /required link missing/.test(p)));
+  assert.ok(msgs(['Hook', 'Mid', 'https://example.com/a https://example.com/b https://evil.dev/z'], 3).some((p) => /unknown URL/.test(p)));
+  assert.ok(msgs(['Hook', 'Mid', 'https://example.com/a https://example.com/b and also oracle.com/docs'], 3).some((p) => /oracle\.com\/docs/.test(p)), 'bare domains are rejected');
   assert.equal(requiredLinksFor(idea_, 1).length, 1);
   assert.equal(X_LIMIT, 280);
+  // issues carry stable codes
+  assert.deepEqual(validateThread(['x'.repeat(300), 'b', 'c'], idea_, 3).map((i) => i.code).slice(0, 1), ['too_long:1']);
+});
+
+test('X length: scheme-less domains count as 23 like X does; look-alikes do not', () => {
+  assert.equal(xWeightedLength('see blogs.oracle.com/peoplesoft/new-release-notes-for-the-latest-update now'), 4 + 23 + 4);
+  assert.equal(xWeightedLength('Oracle.com.'), 24, 'trailing period is outside the link');
+  assert.equal(xWeightedLength('Node.js v8.62 e.g. fine'), 23, 'not links');
+  assert.equal(xWeightedLength('mail me@oracle.com'), 18, 'emails are not links');
+  assert.equal(xWeightedLength('© ® ™'), 1 + 1 + 1 + 1 + 2, 'copyright/registered stay 1-weight; trademark sign is weight 2');
+});
+
+test('candidate cap is balanced across categories', () => {
+  const mk = (n, cats, primary) => ({ id: n, url: `https://e.com/${n}`, publishedAt: new Date(Date.now() - n * 60_000).toISOString(), isPrimary: primary, categories: new Set(cats) });
+  // 120 primary general articles would crowd out 10 non-primary PeopleSoft ones under a plain global sort
+  const general = Array.from({ length: 120 }, (_, i) => mk(i, ['general'], true));
+  const ps = Array.from({ length: 10 }, (_, i) => mk(1000 + i, ['peoplesoft'], false));
+  const picked = selectCandidates([...general, ...ps], ['oracle', 'peoplesoft', 'general'], 90);
+  assert.equal(picked.length, 90);
+  assert.equal(picked.filter((c) => c.categories.has('peoplesoft')).length, 10);
+  assert.equal(new Set(picked).size, 90, 'no duplicates when an article belongs to several categories');
+});
+
+test('LinkedIn validation exposes stable issue codes', () => {
+  const v = validatePost({ hook: 'h'.repeat(300), body: 'x'.repeat(3100), ctaLine: '' }, { sources, ctaUrl: 'https://me.dev' });
+  assert.deepEqual(v.issues.map((i) => i.code).sort(), ['cta_missing', 'hook_long', 'post_too_long']);
+});
+
+test('redact leaves ordinary words alone', () => {
+  assert.equal(redact('The CTA URL for "Risk-based patching" is invalid', []), 'The CTA URL for "Risk-based patching" is invalid');
+  assert.ok(!redact('key sk-abcdef123456', []).includes('abcdef'));
 });
 
 test('redact removes keys even when a provider echoes them', () => {

@@ -17,7 +17,13 @@ const SECURITY_HEADERS = {
 };
 
 function serveStatic(req, res) {
-  const pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  let pathname;
+  try {
+    pathname = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
+  } catch {
+    res.writeHead(400, { 'content-type': 'text/plain' }).end('Bad request');
+    return;
+  }
   let file = normalize(join(dist, pathname));
   if (file !== dist && !file.startsWith(dist + sep)) {
     res.writeHead(403).end('Forbidden');
@@ -34,17 +40,26 @@ function serveStatic(req, res) {
     'content-type': MIME[extname(file)] || 'application/octet-stream',
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
   });
-  createReadStream(file).pipe(res);
+  const stream = createReadStream(file);
+  stream.on('error', () => res.destroy());
+  stream.pipe(res);
 }
 
 const api = createApiHandler();
 const server = createServer(async (req, res) => {
-  if (await api(req, res)) return;
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    res.writeHead(405).end();
-    return;
+  // Nothing thrown while handling a request may take the process down: that
+  // would also drop every in-memory API-key session.
+  try {
+    if (await api(req, res)) return;
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.writeHead(405).end();
+      return;
+    }
+    serveStatic(req, res);
+  } catch {
+    if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain' });
+    res.end('Internal error');
   }
-  serveStatic(req, res);
 });
 
 server.listen(config.port, config.host, () => {
